@@ -1,45 +1,90 @@
 import asyncio
 import websockets
-import json
+import random
+import string
 
 
 class Message:
-    def identify_as_cpu_client():
+    cpu = "TYPE<CPU>"
+    gpu = "TYPE<GPU>"
+
+    def identify_as_cpu_client(self):
         return "CLASS<WEBSOCKET_CPU_CLIENT>"
 
-    def identify_as_gpu_client(session_id):
-        return f"CLASS<WEBSOCKET_GPU_CLIENT><SESSION_ID:{session_id}>"
+    def identify_as_gpu_client(self, session_id):
+        return f"CLASS<WEBSOCKET_GPU_CLIENT><SESSION_ID:{session_id}:>"
 
-    def request_status():
-        return "GET<STATUS>"
+    def get_client_type(self, message):
+        """
+        Returns Message.cpu if message indicates that the user is cpu.
+        Returns session_id if message indicates the that the user is gpu.
+        Returns None if the message is not indicative (could be data).
+        """
+        if message == self.identify_as_cpu_client():
+            return self.cpu
+        else:
+            try:
+                if "CLASS<WEBSOCKET_GPU_CLIENT><SESSION_ID:" in message:
+                    return message.split(":")[-2]
+                else:
+                    return None
+            except:
+                return None
 
 
 class Host:
     def __init__(self) -> None:
-        self.connections = set()
-        self.cpu_clients = set()
-        self.gpu_clients = set()
+        self.sessions = {}
         self._msg = Message()
 
-    async def register(self, websocket):
+    def __generate_session_id(self):
+        characters = string.ascii_letters + string.digits
+        session_key = ''.join(random.choice(characters) for _ in range(8))
+        print(session_key)
+        return session_key
+
+    async def __register(self, websocket):
         print(f"{websocket} connected.")
-        self.connections.add(websocket)
         try:
             async for message in websocket:
-                if message == self._msg.identify_as_cpu_client:
-                    self.cpu_clients.add(websocket)
-                elif message == self._msg.identify_as_gpu_client:
-                    self.gpu_clients.add(websocket)
-                else:
-                    try:
-                        data = json.loads(message)
-                        if type(data) == type(dict()):
-                            with open("user_responses.txt", "a") as file:
-                                file.write(message+"\n")
-                    except:
-                        pass
+                client_type = self._msg.get_client_type(message)
+                if client_type == self._msg.cpu:  # cpu client initiated a session
+                    session_id = self.__generate_session_id()
+                    await websocket.send(session_id)
+                    self.sessions.update({
+                        session_id: {
+                            "websocket": websocket,
+                            "message": None,
+                        }
+                    })
+                elif client_type != None:  # gpu user requests data
+                    # client_type here is the session id
+                    await websocket.send(self.sessions[client_type]["message"])
+                    del self.sessions[client_type]
+                else:  # cpu user sent a message
+                    print(self.sessions)
+                    for session_id in self.sessions:
+                        session = self.sessions[session_id]
+                        if session["websocket"] == websocket:
+                            session["message"] = message
+                            break
+
         except Exception as e:
             print(e)
         finally:
-            self.connections.remove(websocket)
             print(f"{websocket} disconnected.")
+
+    async def run(self, host="localhost", port="8765"):
+        # Start the WebSocket server
+        server = await websockets.serve(
+            self.__register, host, port
+        )
+        print(f"WebSocket server started on ws://{host}:{port}")
+
+        # Run the server indefinitely
+        await server.wait_closed()
+
+
+if __name__ == "__main__":
+    host_instance = Host()
+    asyncio.run(host_instance.run(host="localhost", port=8765))
