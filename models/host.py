@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import random
 import string
+import time
 
 
 class Message:
@@ -43,10 +44,22 @@ class Host:
         print(session_key)
         return session_key
 
+    def __delete_olds(self):
+        to_remove = []
+        current_time = time.time()
+        for session_id in self.sessions:
+            session = self.sessions[session_id]
+            # delete the record after 30 mins
+            if current_time - session["timestamp"] > 1800:
+                to_remove.append(session)
+        for session in to_remove:
+            del session
+
     async def __register(self, websocket):
         print(f"{websocket} connected.")
         try:
             async for message in websocket:
+                self.__delete_olds()
                 client_type = self._msg.get_client_type(message)
                 if client_type == self._msg.cpu:  # cpu client initiated a session
                     session_id = self.__generate_session_id()
@@ -54,6 +67,7 @@ class Host:
                     self.sessions.update({
                         session_id: {
                             "websocket": websocket,
+                            "timestamp": time.time(),
                             "message": None,
                         }
                     })
@@ -62,7 +76,6 @@ class Host:
                     await websocket.send(self.sessions[client_type]["message"])
                     del self.sessions[client_type]
                 else:  # cpu user sent a message
-                    print(self.sessions)
                     for session_id in self.sessions:
                         session = self.sessions[session_id]
                         if session["websocket"] == websocket:

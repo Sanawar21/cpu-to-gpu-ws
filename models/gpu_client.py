@@ -1,33 +1,39 @@
-import asyncio
-import json
 import websockets
-from .host import Message
+import asyncio
+import base64
+import json
+from host import Message
+# from .host import Message
 
 
 class ClientGPU:
-    def __init__(self, uri):
-        self.uri = uri
-        self.websocket = None
-        self._msg = Message()
+    def __init__(self, host, port, session_id):
+        self.host = host
+        self.port = port
+        self.session_id = session_id
+        self.uri = f"ws://{host}:{port}"
+        self.__msg = Message()
 
-    async def connect(self):
-        self.websocket = await websockets.connect(self.uri)
-        print(f"Connected to {self.uri}")
+    async def run_and_download(self, audio_path, video_path):
+        async with websockets.connect(self.uri) as websocket:
+            print(f"Connected to {self.uri}")
+            await websocket.send(self.__msg.identify_as_gpu_client(self.session_id))
+            self.data = await websocket.recv()
 
-    async def send_session_id(self, session_id):
-        if self.websocket:
-            await self.websocket.send(self._msg.identify_as_gpu_client(session_id))
-            print(f"Sent data: {self._msg.identify_as_gpu_client(session_id)}")
+            json_object = json.loads(self.data)
+            audio_encoded = json_object['audio']
+            video_encoded = json_object['video']
+            audio_data = base64.b64decode(audio_encoded)
+            video_data = base64.b64decode(video_encoded)
 
-    async def receive_data(self):
-        if self.websocket:
-            response = await self.websocket.recv()
-            json_object = json.loads(response)
-            audio_data, video_data = json_object["audio"], json_object["video"]
+            with open(audio_path, "wb") as file:
+                file.write(audio_data)
 
-            return response
+            with open(video_path, "wb") as file:
+                file.write(video_data)
 
-    async def close(self):
-        if self.websocket:
-            await self.websocket.close()
-            print("WebSocket connection closed")
+
+if __name__ == "__main__":
+    client = ClientGPU("localhost", 8765, input("Enter session id: "))
+    asyncio.run(client.run_and_download(
+        "outputs/download.mp4", "outputs/download.wav"))
